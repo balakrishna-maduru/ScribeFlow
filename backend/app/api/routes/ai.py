@@ -70,6 +70,25 @@ async def get_providers(
         )
 
 
+@router.get("/test/providers", response_model=ProvidersResponse)
+async def get_providers_public():
+    """Get available AI providers (public endpoint for testing)."""
+    try:
+        providers = ai_service.get_available_providers()
+        from app.core.config import get_settings
+        settings = get_settings()
+        
+        return ProvidersResponse(
+            providers=providers,
+            default_provider=settings.default_ai_provider
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get providers: {str(e)}"
+        )
+
+
 @router.get("/providers/{provider}/models", response_model=ModelsResponse)
 async def get_models(
     provider: str,
@@ -108,29 +127,80 @@ async def chat_completion(
         # Convert Pydantic models to dict for AI service
         messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
         
-        # Use user's preferred provider if not specified
-        provider = request.provider or current_user.preferred_ai_provider.value
-        model = request.model or current_user.preferred_model
-        
-        if request.stream:
+        # Try to use the main AI service first, fallback to mock service
+        try:
+            # Use user's preferred provider if not specified
+            provider = request.provider or "google"  # Default to Google/Gemini
+            model = request.model or "gemini-1.5-flash"  # Default Gemini model
+            
+            if request.stream:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Streaming not supported in this endpoint. Use /ai/chat/stream"
+                )
+
+            response_content = await ai_service.chat_completion(
+                messages=messages,
+                provider=provider,
+                model=model,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens
+            )
+            
+            return ChatResponse(
+                content=response_content,
+                provider=provider,
+                model=model
+            )
+        except Exception as ai_error:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Streaming not supported in this endpoint. Use /ai/chat/stream"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"AI service error: {str(ai_error)}"
             )
         
-        response_content = await ai_service.chat_completion(
-            messages=messages,
-            provider=provider,
-            model=model,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
         )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"AI service error: {str(e)}"
+        )
+
+
+@router.post("/test/chat", response_model=ChatResponse)
+async def chat_completion_public(request: ChatRequest):
+    """Generate chat completion (public endpoint for testing)."""
+    try:
+        # Convert Pydantic models to dict for AI service
+        messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
         
-        return ChatResponse(
-            content=response_content,
-            provider=provider,
-            model=model
-        )
+        # Try to use the main AI service first, fallback to mock service
+        try:
+            # Use default provider
+            provider = request.provider or "google"  # Try Google/Gemini first
+            model = request.model or "gemini-1.5-flash"  # Default Gemini model
+            
+            response_content = await ai_service.chat_completion(
+                messages=messages,
+                provider=provider,
+                model=model,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens
+            )
+            
+            return ChatResponse(
+                content=response_content,
+                provider=provider,
+                model=model
+            )
+        except Exception as ai_error:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"AI service error: {str(ai_error)}"
+            )
         
     except ValueError as e:
         raise HTTPException(
